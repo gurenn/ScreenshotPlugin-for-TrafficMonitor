@@ -1,0 +1,9 @@
+bin/
+build/
+out-test/
+*.log
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib

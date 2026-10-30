@@ -1,0 +1,185 @@
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant OS as 系统
+    participant HK as SinkWnd_宿主UI线程
+    participant SM as CScreenshotSession
+    participant W as TID_Job作业线程
+    participant CE as CCaptureEngine
+    participant IW as CImageWriter
+    participant ST as CPluginSettings
+    participant SINK as SinkWnd_TID_H
+    participant HOST as CTMPlugin_TID_H
+    participant APP as ITrafficMonitor
+
+    U->>OS: 按下 Ctrl+Alt+A
+    OS->>HK: WM_HOTKEY(kHotkeyId)（热键注册在 sink 窗口上，与宿主 UI 同线程）
+    HK->>SM: SinkProc → RequestCapture(FullScreen, 0, Source::Hotkey) → Request({FullScreen, delay=0, cursor})
+    Note over SM: 互斥检查 m_busy<br/>防抖检查 now 减 m_lastTick 小于 300ms<br/>任一命中则直接丢弃并返回 false
+    SM->>SM: m_busy=true, m_lastTick=now
+    SM->>W: CreateThread(JobThreadProc, heap&lt;JobContext&gt;) + CloseHandle（不 join）
+    Note over HK: 立即返回，热键线程不阻塞
+    W->>W: snap::SetThreadDpiAwarenessContext(PMv2)（本线程私有）
+    W->>ST: EffectiveSaveDir()
+    W->>CE: CaptureFullScreen(includeCursor, rc)
+    CE->>CE: VirtualScreenRect() / GetDC(NULL) / BitBlt(SRCCOPY|CAPTUREBLT)
+    CE->>CE: 光标 GetCursorInfo+DrawIconEx（可选）
+    CE->>CE: 尺寸/内存守卫 + 安全桌面/全黑判定
+    CE-->>W: CapturedFrame (32bppBGRA top-down)
+    W->>IW: Save(frame, settings, outPath, outErr)
+    IW->>ST: BuildFileName(now) + MakeUniquePath(desired)
+    IW->>IW: CoCreateInstance(WICImagingFactory)（首次，缓存于线程）
+    IW->>IW: CreateBitmapFromMemory → CreateEncoder(容器) → InitializeFromFilename
+    IW->>IW: SetPropertyBag(ImageQuality)（仅JPG）→ WriteSource → Commit
+    IW-->>W: SnapCode + outPath
+    W->>IW: CopyToClipboard(frame, hSink)（copyToClipboard=true 时）
+    W->>SINK: PostMessage(WM_SNAP_RESULT, code, heap<SessionResult*>)
+    W->>W: frame.Reset()<br/>CThreadScope 析构 → WIC Release + CoUninitialize（配对）<br/>m_busy=false → 线程返回并自行退出
+    SINK->>HOST: SinkProc → OnSessionResult(...)
+    HOST->>APP: ShowNotifyMessage(L"已保存：TMSnap_20261029_153012.png")
+    HOST->>HOST: UpdateTooltip() → m_lastFileName/m_lastTime
+    HOST->>HOST: InvalidateRect(GetMainWindowHwnd/GetTaskbarWindowHwnd)
+    Note over HOST: 宿主下一次绘制会重新调用<br/>CScreenshotItem::GetItemValueText / DrawItemEx
+
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant HOSTWND as 宿主窗口_TID_H
+    participant ITEM as CScreenshotItem
+    participant PLG as CTMPlugin
+    participant SM as CScreenshotSession
+    participant W as TID_Job作业线程
+    participant SINK as SinkWnd_TID_H
+
+    Note over HOSTWND: 宿主定时刷新 → GetItemValueText()（IsCustomDraw=true 时仅用于宽度估算，须返回非空指针）
+    HOSTWND->>ITEM: DrawItemEx(pDrawer, x, y, w, h, dark_mode)
+    ITEM->>ITEM: DrawerSink sink(pDrawer)<br/>DrawCameraGlyph(sink, min(w,h), x, y, dark_mode ? 浅色 : 深色)
+    ITEM-->>HOSTWND: true（已完全自绘）
+    U->>HOSTWND: 左键单击图标区域
+    HOSTWND->>ITEM: OnMouseEvent(MT_LCLICKED, x, y, hWnd, flag)
+    ITEM->>PLG: RequestCapture(FullScreen, 0, Source::ItemClick)
+    PLG->>SM: Request(req, fromHotkey=false)
+    alt 会话进行中 或 距上次触发不足 300ms 或 设置对话框打开
+        SM-->>PLG: false（静默丢弃，不提示）
+        PLG-->>ITEM: 已完成响应
+        ITEM-->>HOSTWND: 返回 1（吃掉事件，宿主不再处理）
+    else 允许
+        SM->>W: PostMessage(WM_SNAP_JOB)
+        ITEM-->>HOSTWND: 返回 1
+        Note over W: 与 4.1 第 10 步之后完全一致
+        W->>SINK: PostMessage(WM_SNAP_RESULT, ...)
+    end
+    Note over ITEM: MT_RCLICKED 一律返回 0<br/>（必须让宿主弹出右键菜单，否则用户看不到 6 条插件命令）<br/>MT_DBCLICKED 返回 1 但不触发截图（防重复）
+
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant HOST as 宿主右键菜单_TID_H
+    participant PLG as CTMPlugin
+    participant SM as CScreenshotSession
+    participant W as TID_Job作业线程
+    participant RS as CRegionSelector
+    participant CE as CCaptureEngine
+    participant IW as CImageWriter
+    participant SINK as SinkWnd_TID_H
+
+    U->>HOST: 右键任务栏窗口 → 插件菜单 → 区域截图
+    HOST->>PLG: OnPluginCommand(1, hWnd, para)
+    PLG->>SM: Request({Region}, false)
+    SM->>W: PostMessage(WM_SNAP_JOB)
+    PLG-->>HOST: 立即返回（不阻塞宿主 UI）
+    W->>W: DPI 上下文 + CoInitialize
+    W->>RS: Select(hStop)
+    RS->>RS: RegisterClassEx + CreateWindowEx(WS_EX_TOPMOST|LAYERED|TOOLWINDOW)<br/>SetWindowPos(虚拟屏幕矩形) + SetCapture + SetFocus
+    RS->>RS: 合成遮罩（选区外 alpha=120 黑，选区内 alpha=0）
+    loop 模态消息循环（在本线程，不在 TID_H）
+        RS->>RS: GetMessage → DispatchMessage
+        U->>RS: WM_MOUSEMOVE / WM_LBUTTONDOWN / WM_LBUTTONUP / WM_KEYDOWN(Esc,Enter) / WM_RBUTTONUP
+        RS->>RS: 重算 m_sel → 重绘脏矩形 → UpdateLayeredWindow
+    end
+    alt 确认（松开左键 / Enter / 双击）且宽高 >= 4
+        RS->>RS: DestroyWindow + DwmFlush + 等待遮罩消失
+        RS-->>W: SelectionResult{true, rect}
+        W->>CE: CaptureRegion(rect, includeCursor, rc)
+        CE-->>W: CapturedFrame
+        W->>IW: Save(...) → outPath
+        W->>SINK: PostMessage(WM_SNAP_RESULT, SNAP_OK, payload)
+    else 取消（Esc / 右键 / 选区<4x4）
+        RS->>RS: DestroyWindow
+        RS-->>W: SelectionResult{false}
+        W->>W: 直接结束会话，不发通知（静默）
+    end
+
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant HOST as 宿主_TID_H
+    participant PLG as CTMPlugin
+    participant DLG as COptionsDialog
+    participant ST as CPluginSettings
+    participant HK as SinkWnd_宿主UI线程
+    participant SINK as SinkWnd_TID_H
+
+    U->>HOST: 插件菜单 → 设置…
+    HOST->>PLG: ShowOptionsDialog(hParent)
+    PLG->>PLG: m_optionsOpen = true（抑制期间所有触发）
+    PLG->>DLG: Show((HWND)hParent)
+    DLG->>DLG: BuildTemplate(内存DLGTEMPLATE) + DialogBoxIndirectParamW
+    DLG->>ST: Load() 结果载入 m_work 并填充控件
+    loop 用户操作（全程不写 ini）
+        U->>DLG: 改格式 / 质量 / 模板 / 勾选项 / 录制热键
+        DLG->>DLG: 实时刷新示例文件名、启用状态、范围校验
+        opt 点击「立即截屏」
+            DLG->>DLG: ReadFromControls() → 临时 PluginSettings
+            DLG->>DLG: 同步执行一次抓屏+编码（用当前参数）
+            DLG->>DLG: 结果显示在对话框内状态文字（不弹宿主气泡）
+        end
+    end
+    alt 确定
+        DLG->>DLG: ReadFromControls() + 校验（目录可写探测、热键至少一个修饰键）
+        DLG->>ST: data = m_work; Save()（UTF-16LE BOM + WritePrivateProfileStringW）
+        DLG->>PLG: m_hotkeys.Apply(新 HotkeyBinding, enabled)（同线程直接调用）
+        HK->>HK: UnregisterHotKey(旧) → RegisterHotKey(新)
+        HK->>SINK: PostMessage(WM_SNAP_HOTKEY_RESULT, code)（失败则 SINK 侧提示并保留旧值）
+        DLG-->>PLG: OR_OPTION_CHANGED
+    else 取消 / 恢复默认后取消
+        DLG-->>PLG: OR_OPTION_UNCHANGED（不写 ini）
+    end
+    PLG->>PLG: m_optionsOpen = false
+    PLG-->>HOST: OptionReturn
+
+sequenceDiagram
+    autonumber
+    participant OS as 系统/宿主
+    participant DLL as DllMain(DETACH)
+    participant PLG as CTMPlugin
+    participant SESS as CScreenshotSession
+    participant HK as CHotkeyManager
+    participant JOB as TID_Job（可能有，也可能没有）
+
+    OS->>DLL: FreeLibrary 或 进程退出（两者路径相同）
+    DLL->>PLG: Shutdown()
+    PLG->>PLG: m_shutdown = true（exchange 保证只执行一次）
+    PLG->>SESS: Stop() → m_shutdown=true + SetEvent(hStop)
+    PLG->>HK: Stop() → UnregisterHotKey(m_hSink, kHotkeyId)
+    opt 有作业线程在跑
+        JOB->>JOB: 倒计时 / 覆盖层循环检测到 hStop → 返回（CThreadScope 跳过 COM 收尾）
+        JOB-->>JOB: 线程函数返回，自行退出（无需 join）
+    end
+    PLG->>PLG: sink = m_hSink; m_hSink = nullptr; DestroyWindow(sink)
+    Note over DLL: 到此返回。零等待 —— 插件没有任何常驻线程需要等
+
+stateDiagram-v2
+    [*] --> Loaded: LoadLibrary
+    Loaded --> Initialized: OnInitialize(pApp)
+    Initialized --> Idle: sink 窗口创建 + 线程启动 + 配置加载 + 热键注册
+    Idle --> Busy: Request() 成功（m_busy=true）
+    Busy --> Idle: 结果回投完成（m_busy=false）
+    Busy --> Busy: Request() 被拒（busy / <300ms / 选项对话框打开）
+    Idle --> OptionsOpen: ShowOptionsDialog
+    OptionsOpen --> Idle: 对话框关闭（无论确定/取消）
+    Idle --> Stopping: Shutdown()（事件 + WM_QUIT）
+    OptionsOpen --> Stopping: Shutdown()（对话框被宿主销毁）
+    Busy --> Stopping: Shutdown()（Cancel → 覆盖层销毁 → Cancelled）
+    Stopping --> [*]: 线程 join 完成 / 进程退出
+

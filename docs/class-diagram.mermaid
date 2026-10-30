@@ -1,0 +1,318 @@
+classDiagram
+direction TB
+
+class ITMPlugin {
+    <<interface 宿主提供>>
+    +GetAPIVersion() int
+    +GetItem(int index) IPluginItem*
+    +DataRequired() void
+    +ShowOptionsDialog(void* hParent) OptionReturn
+    +GetInfo(PluginInfoIndex index) const wchar_t*
+    +OnMonitorInfo(MonitorInfo) void
+    +GetTooltipInfo() const wchar_t*
+    +OnExtenedInfo(ExtendedInfoIndex index, const wchar_t* data) void
+    +GetPluginIcon() void*
+    +GetCommandCount() int
+    +GetCommandName(int command_index) const wchar_t*
+    +GetCommandIcon(int command_index) void*
+    +OnPluginCommand(int command_index, void* hWnd, void* para) void
+    +IsCommandChecked(int command_index) int
+    +OnInitialize(ITrafficMonitor* pApp) void
+}
+
+class IPluginItem {
+    <<interface 宿主提供>>
+    +GetItemName() const wchar_t*
+    +GetItemId() const wchar_t*
+    +GetItemLableText() const wchar_t*
+    +GetItemValueText() const wchar_t*
+    +GetItemValueSampleText() const wchar_t*
+    +IsCustomDraw() bool
+    +GetItemWidth() int
+    +GetItemWidthEx(void* hDC) int
+    +DrawItem(void* hDC, int x, int y, int w, int h, bool dark_mode) void
+    +DrawItemEx(IPluginDrawer* pDrawer, int x, int y, int w, int h, bool dark_mode) bool
+    +OnMouseEvent(MouseEventType type, int x, int y, void* hWnd, int flag) int
+    +OnKeboardEvent(int key, bool ctrl, bool shift, bool alt, void* hWnd, int flag) int
+    +IsDoubleLineExclusive() int
+}
+
+class ITrafficMonitor {
+    <<interface 宿主提供>>
+    +GetAPIVersion() int
+    +GetVersion() const wchar_t*
+    +ShowNotifyMessage(const wchar_t* strMsg) void
+    +GetLanguageId() unsigned short
+    +GetPluginConfigDir() const wchar_t*
+    +GetDPI(DPIType type) int
+    +GetThemeColor() unsigned int
+    +GetMainWindowHwnd() void*
+    +GetTaskbarWindowHwnd() void*
+}
+
+class IPluginDrawer {
+    <<interface 宿主提供>>
+    +GetAPIVersion() int
+    +DrawWindowText(int x, int y, int w, int h, const wchar_t* s, unsigned long color, Alignment a, bool multi_line, unsigned char alpha) void
+    +SetDrawRect(int x, int y, int w, int h) void
+    +FillRect(int x, int y, int w, int h, unsigned long color, unsigned char alpha) void
+    +DrawRectOutLine(int x, int y, int w, int h, unsigned long color, int width, bool dot_line, unsigned char alpha, int radius) void
+    +DrawBitmap(void* hbitmap, int x, int y, int w, int h, StretchMode m, unsigned char alpha) void
+    +DrawIcon(void* hIcon, int x, int y, int w, int h) void
+    +DrawLine(int x1, int y1, int x2, int y2, unsigned long color, int width, bool dot_line, unsigned char alpha) void
+    +GetHDC() void*
+}
+
+class CScreenshotItem {
+    -CTMPlugin* m_owner
+    -wstring m_name
+    -wstring m_id
+    -wstring m_label
+    +GetItemName() const wchar_t*
+    +GetItemId() const wchar_t*
+    +GetItemLableText() const wchar_t*
+    +GetItemValueText() const wchar_t*
+    +GetItemValueSampleText() const wchar_t*
+    +IsCustomDraw() bool
+    +GetItemWidth() int
+    +GetItemWidthEx(void* hDC) int
+    +DrawItemEx(IPluginDrawer* pDrawer, int x, int y, int w, int h, bool dark_mode) bool
+    +DrawItem(void* hDC, int x, int y, int w, int h, bool dark_mode) void
+    +OnMouseEvent(MouseEventType type, int x, int y, void* hWnd, int flag) int
+    +IsDoubleLineExclusive() int
+}
+
+class GlyphSink {
+    <<abstract>>
+    +Fill(int x, int y, int w, int h, unsigned long color)
+    +Frame(int x, int y, int w, int h, unsigned long color, int width, bool dot, int radius)
+    +Line(int x1, int y1, int x2, int y2, unsigned long color, int width)
+}
+class DrawerSink {
+    -IPluginDrawer* m_d
+    +Fill(...)
+    +Frame(...)
+    +Line(...)
+}
+class HdcSink {
+    -HDC m_dc
+    +Fill(...)
+    +Frame(...)
+    +Line(...)
+}
+
+class CPluginSettings {
+    +PluginSettings data
+    +wstring configDir
+    +wstring iniPath
+    +bool Load(const wstring& dir)
+    +bool Save() const
+    +void ResetToDefault()
+    +wstring EffectiveSaveDir() const
+    +wstring BuildFileName(const SYSTEMTIME& st) const
+    +bool EnsureSaveDir(wstring& err) const
+    +wstring ExpandTemplate(const SYSTEMTIME& st) const
+}
+
+class PluginSettings {
+    <<struct>>
+    +wstring saveDir
+    +ImageFormat format
+    +int jpgQuality
+    +wstring fileNameTemplate
+    +bool copyToClipboard
+    +bool includeCursor
+    +bool hotkeyEnabled
+    +HotkeyBinding hotkey
+    +int delaySeconds
+    +bool fallbackToPicturesRoot
+    +wstring lastSavedPath
+}
+
+class HotkeyBinding {
+    <<struct>>
+    +UINT modifiers
+    +UINT vk
+    +bool IsValid() const
+    +wstring ToText() const
+}
+
+class CUxText {
+    -unsigned short m_langId
+    +Init(unsigned short hostLangId) void
+    +Str(StringId id) const wchar_t*
+    +SnapCodeText(SnapCode code) const wchar_t*
+}
+
+class CCaptureEngine {
+    -bool m_dpiCtxApplied
+    +CapturedFrame CaptureFullScreen(bool includeCursor, SnapCode& rc)
+    +CapturedFrame CaptureRegion(const RECT& rc, bool includeCursor, SnapCode& rc)
+    +CapturedFrame CaptureActiveWindow(bool includeCursor, SnapCode& rc, wstring& err)
+    +static RECT VirtualScreenRect()
+    +static bool IsSecureDesktop()
+}
+
+class CapturedFrame {
+    <<struct>>
+    +HBITMAP hBitmap
+    +HDC hMemDC
+    +void* bits
+    +int width
+    +int height
+    +int stride
+    +bool IsValid() const
+    +void Reset()
+}
+
+class CaptureRequest {
+    <<struct>>
+    +CaptureMode mode
+    +int delaySeconds
+    +bool includeCursor
+    +CaptureSource source
+    +RECT region
+}
+
+class CImageWriter {
+    -IWICImagingFactory* m_factory
+    +bool InitThread()
+    +void ShutdownThread()
+    +SnapCode Save(const CapturedFrame& f, const CPluginSettings& s, wstring& outPath, wstring& outErr)
+    +SnapCode CopyToClipboard(const CapturedFrame& f, HWND hOwner)
+    +static bool MakeUniquePath(const wstring& desired, wstring& out)
+}
+
+class CRegionSelector {
+    -HWND m_hwnd
+    -bool m_cancel
+    -RECT m_sel
+    +SelectionResult Select(HANDLE hCancelEvent)
+    +static LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM)
+    -bool ComposeMask(HDC dc, const RECT& dirty)
+    -void UpdateWindowLayered()
+}
+
+class SelectionResult {
+    <<struct>>
+    +bool confirmed
+    +RECT rect
+}
+
+class CScreenshotSession {
+    %% v1.0.1: no resident thread, no worker window; one job thread per Request (never joined)
+    -HANDLE m_hStop
+    -atomic_bool m_busy
+    -atomic_bool m_shutdown
+    -ULONGLONG m_lastTick
+    -CPluginSettings* m_pSettings
+    -CUxText* m_pText
+    -HWND m_hSink
+    +bool Start(CPluginSettings* p, CUxText* t, HWND hSink)
+    +void Stop()
+    +SnapCode Request(const CaptureRequest& req)
+    +bool IsBusy() const
+    +void Cancel()
+    +static DWORD WINAPI JobThreadProc(void* ctx)
+    -void PostResult(SnapCode code, const wstring& path, const wstring& detail, int w, int h)
+}
+
+class CHotkeyManager {
+    %% v1.0.1: no dedicated thread; registered on the sink window (host UI thread)
+    -HWND m_hwnd
+    -HotkeyBinding m_current
+    -bool m_registered
+    -bool m_enabled
+    +void Attach(HWND hSink)
+    +bool Apply(const HotkeyBinding& b, bool enabled)
+    +void Stop()
+    +bool IsRegistered() const
+    +bool IsEnabled() const
+    +HotkeyBinding Current() const
+    -void DoUnregister()
+    -bool DoRegister()
+}
+
+class COptionsDialog {
+    -CPluginSettings* m_pSettings
+    -PluginSettings m_work
+    -CUxText* m_pText
+    -bool m_changed
+    -HFONT m_hFont
+    +OptionReturn Show(HWND hParent)
+    +static INT_PTR CALLBACK DlgProc(HWND, UINT, WPARAM, LPARAM)
+    -void BuildTemplate(vector~BYTE~& out)
+    -void LayoutControls(HWND hDlg)
+    -void LoadToControls(HWND hDlg)
+    -bool ReadFromControls(HWND hDlg, PluginSettings& out, wstring& err)
+    -void OnTestCapture(HWND hDlg)
+}
+
+class CTMPlugin {
+    -ITrafficMonitor* m_app
+    -CPluginSettings m_settings
+    -CUxText m_text
+    -CScreenshotItem m_item
+    -CScreenshotSession m_session
+    -CHotkeyManager m_hotkeys
+    -HWND m_hSink
+    -HICON m_hPluginIcon
+    -HICON m_hCmdIcon
+    -wstring m_tooltip
+    -wstring m_lastFileName
+    -SYSTEMTIME m_lastTime
+    -bool m_optionsOpen
+    -bool m_shutdown
+    +OnInitialize(ITrafficMonitor* pApp) void
+    +GetItem(int index) IPluginItem*
+    +DataRequired() void
+    +GetInfo(PluginInfoIndex index) const wchar_t*
+    +GetTooltipInfo() const wchar_t*
+    +OnExtenedInfo(ExtendedInfoIndex index, const wchar_t* data) void
+    +GetPluginIcon() void*
+    +GetCommandCount() int
+    +GetCommandName(int i) const wchar_t*
+    +GetCommandIcon(int i) void*
+    +OnPluginCommand(int i, void* hWnd, void* para) void
+    +IsCommandChecked(int i) int
+    +ShowOptionsDialog(void* hParent) OptionReturn
+    +RequestCapture(CaptureMode m, int delaySec, CaptureSource src)
+    +OpenSaveFolder()
+    +OnSessionResult(SnapCode code, const wstring& path, const wstring& detail, int w, int h)
+    +UpdateTooltip()
+    +EnsureIcons()
+    +Shutdown()
+    +static LRESULT CALLBACK SinkProc(HWND, UINT, WPARAM, LPARAM)
+}
+
+CTMPlugin ..|> ITMPlugin
+CScreenshotItem ..|> IPluginItem
+DrawerSink ..|> GlyphSink
+HdcSink ..|> GlyphSink
+
+CTMPlugin *-- CScreenshotItem : owns
+CTMPlugin *-- CScreenshotSession : owns
+CTMPlugin *-- CHotkeyManager : owns
+CTMPlugin *-- CPluginSettings : owns
+CTMPlugin *-- CUxText : owns
+CTMPlugin ..> ITrafficMonitor : uses (not owned)
+CTMPlugin ..> COptionsDialog : creates
+CTMPlugin ..> IPluginDrawer : receives
+
+CScreenshotItem ..> DrawerSink : creates
+CScreenshotItem ..> CTMPlugin : requests capture
+
+CScreenshotSession *-- CCaptureEngine : owns
+CScreenshotSession *-- CImageWriter : owns
+CScreenshotSession ..> CRegionSelector : creates
+CScreenshotSession ..> CaptureRequest : consumes
+CCaptureEngine ..> CapturedFrame : produces
+CScreenshotSession ..> CPluginSettings : reads
+CScreenshotSession ..> CUxText : reads
+CImageWriter ..> CPluginSettings : reads
+CImageWriter ..> CapturedFrame : consumes
+CRegionSelector ..> SelectionResult : produces
+COptionsDialog ..> CPluginSettings : reads+writes
+COptionsDialog ..> CapturedFrame : test capture
+CHotkeyManager ..> HotkeyBinding : uses
+
